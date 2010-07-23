@@ -1,3 +1,5 @@
+.svn
+
 *.log
 *.swp
 *~
@@ -6,6 +8,7 @@
 *.pbxbtree
 .DS_Store
 *.metadata
+*.svn-base
 .actionScriptProperties
 workspace/Swindle/.actionScriptProperties
 */.settings

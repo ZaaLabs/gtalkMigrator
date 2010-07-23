@@ -1,8 +1,276 @@
 <?xml version="1.0" encoding="utf-8"?>
 <s:Application xmlns:fx="http://ns.adobe.com/mxml/2009" 
 			   xmlns:s="library://ns.adobe.com/flex/spark" 
-			   xmlns:mx="library://ns.adobe.com/flex/mx" minWidth="955" minHeight="600">
+			   xmlns:mx="library://ns.adobe.com/flex/mx"
+			   creationComplete="onCreationComplete(event)" viewSourceURL="srcview/index.html">
+	
+	<fx:Script>
+		<![CDATA[
+			import com.hurlant.crypto.tls.TLSConfig;
+			
+			import mx.controls.Alert;
+			import mx.events.FlexEvent;
+			import mx.events.ValidationResultEvent;
+			import mx.validators.ValidationResult;
+			
+			import org.igniterealtime.xiff.core.UnescapedJID;
+			import org.igniterealtime.xiff.core.XMPPConnection;
+			import org.igniterealtime.xiff.core.XMPPTLSConnection;
+			import org.igniterealtime.xiff.data.XMPPStanza;
+			import org.igniterealtime.xiff.data.im.RosterItemVO;
+			import org.igniterealtime.xiff.events.BookmarkChangedEvent;
+			import org.igniterealtime.xiff.events.ConnectionSuccessEvent;
+			import org.igniterealtime.xiff.events.DisconnectionEvent;
+			import org.igniterealtime.xiff.events.LoginEvent;
+			import org.igniterealtime.xiff.events.RosterEvent;
+			import org.igniterealtime.xiff.events.XIFFErrorEvent;
+			import org.igniterealtime.xiff.im.Roster;
+			
+			private var fromConnection:XMPPTLSConnection;
+			private var toConnection:XMPPTLSConnection;
+			
+			private var fromRosterFetched:Boolean;
+			private var toRosterFetched:Boolean;
+			
+			private var fromRoster:Roster;
+			private var toRoster:Roster;
+			
+			private var usersToMigrate:Vector.<RosterItemVO>;
+			
+			private var doMigrate:Boolean = false;
+			
+			protected function onCreationComplete(event:FlexEvent):void
+			{
+				
+				/*** SETUP FROM CONNECTION ***/
+				fromConnection = new XMPPTLSConnection();
+				fromConnection.server = "talk.google.com";
+				
+				fromConnection.addEventListener(ConnectionSuccessEvent.CONNECT_SUCCESS, onFromConnectSuccess);
+				fromConnection.addEventListener(XIFFErrorEvent.XIFF_ERROR, onFromError);
+				fromConnection.addEventListener(LoginEvent.LOGIN, onFromLogin);
+				
+				
+				/*** SETUP TO CONNECTION ***/
+				toConnection = new XMPPTLSConnection();
+				toConnection.server = "talk.google.com";
+				
+				toConnection.addEventListener(ConnectionSuccessEvent.CONNECT_SUCCESS, onToConnectSuccess);
+				toConnection.addEventListener(XIFFErrorEvent.XIFF_ERROR, onToError);
+				toConnection.addEventListener(LoginEvent.LOGIN, onToLogin);
+			}
+			
+			private function doConnect():void
+			{
+				var fromUserAry:Array = fromUsername.text.split("@");
+				var fromUsername:String = fromUserAry[0];
+				var fromDomain:String =  fromUserAry[1];
+				fromConnection.config = new TLSConfig(0);
+				fromConnection.config.ignoreCommonNameMismatch = true;
+				fromConnection.username = fromUsername;
+				fromConnection.password = fromPassword.text;
+				fromConnection.domain = fromDomain ? fromDomain : "talk.google.com";
+				fromConnection.useAnonymousLogin = false;
+				log("Connecting to: "+fromConnection.domain);
+				fromConnection.connect();
+				
+				var toUserAry:Array = toUsername.text.split("@");
+				var toUsername:String = toUserAry[0];
+				var toDomain:String =  toUserAry[1];
+				toConnection.config = new TLSConfig(1);
+				toConnection.config.ignoreCommonNameMismatch = true;
+				toConnection.username = toUsername;
+				toConnection.password = toPassword.text;
+				toConnection.domain = toDomain ? toDomain : "talk.google.com";
+				toConnection.useAnonymousLogin = false;
+				log("Connecting to: "+toConnection.domain);
+				toConnection.connect();
+			}
+			
+			private function compareRosters():void
+			{
+				if(!toRosterFetched || !fromRosterFetched) return;
+				
+				log("Both Rosters fetched");
+				usersToMigrate = new Vector.<RosterItemVO>();
+				for(var i:int=0; i<fromRoster.length; i++)
+				{
+					var exists:Boolean = false;
+					var fri:RosterItemVO = RosterItemVO(fromRoster.getItemAt(i));
+					
+					for(var e:int=0; e<toRoster.length; e++)
+					{
+						var tri:RosterItemVO = RosterItemVO(toRoster.getItemAt(e));
+						if(fri.uid == tri.uid)
+						{
+							exists = true;
+							break;
+						}
+					} 
+					
+					if(!exists)
+					{
+						usersToMigrate.push(fri);
+					}
+				}
+				
+				
+				if(doMigrate)
+				{
+					log("Migrating "+usersToMigrate.length+" users");
+					sendSubRequests();
+				}
+				else
+				{
+					log("Test found "+usersToMigrate.length+" users ready to migrate");
+				}
+			}
+			
+			private function sendSubRequests():void
+			{
+				for each(var ri:RosterItemVO in usersToMigrate)
+				{
+					var groups:Array = fromRoster.getContainingGroups(ri);
+					var group:String = groups[0] ? groups[0] : null;
+					log("Requesting subscription from: "+ri.uid);
+					toRoster.addContact(ri.jid, ri.displayName, group);
+				}
+				
+			}
+			
+			private function onSubscriptionDenial(event:RosterEvent):void
+			{
+				log(event.jid+" denied subscription request");
+			}
+			
+			private function onFromConnectSuccess(event:ConnectionSuccessEvent):void
+			{
+				log("From Connection Opened");
+			}
+			
+			private function onToConnectSuccess(event:ConnectionSuccessEvent):void
+			{
+				log("To Connection Opened");
+			}
+			
+			private function onFromLogin(event:LoginEvent):void
+			{
+				var conn:XMPPConnection = XMPPTLSConnection(event.target);
+				
+				log("From login: "+conn.isLoggedIn());
+				fromRoster = new Roster(conn);
+				fromRoster.addEventListener(RosterEvent.ROSTER_LOADED, onFromRosterLoaded);
+				fromRoster.fetchRoster();
+			}
+			
+			private function onToLogin(event:LoginEvent):void
+			{
+				var conn:XMPPConnection = XMPPTLSConnection(event.target);
+				
+				log("To login: "+conn.isLoggedIn());
+				toRoster = new Roster(conn);
+				toRoster.addEventListener(RosterEvent.ROSTER_LOADED, onToRosterLoaded);
+				toRoster.fetchRoster();
+			}
+			
+			private function onFromRosterLoaded(event:RosterEvent):void
+			{
+				fromRoster.removeEventListener(RosterEvent.ROSTER_LOADED, onFromRosterLoaded);
+				
+				log("From roster fetched: "+fromRoster.length+" buddies");
+				fromRosterFetched = true;
+				
+				compareRosters();
+			}
+			
+			private function onToRosterLoaded(event:RosterEvent):void
+			{
+				toRoster.removeEventListener(RosterEvent.ROSTER_LOADED, onToRosterLoaded);
+				
+				log("To roster fetched: "+toRoster.length+" buddies");
+				toRosterFetched = true;
+				
+				compareRosters();
+			}
+			
+			private function onFromError(event:XIFFErrorEvent):void
+			{
+				log("onFromError: " + event.errorCondition + " " + event.errorMessage);
+			}
+			
+			private function onToError(event:XIFFErrorEvent):void
+			{
+				log("onToError: " + event.errorCondition + " " + event.errorMessage);
+			}
+
+			protected function onTestButtonClick(event:MouseEvent):void
+			{
+				doMigrate = false;
+				doConnect();
+			}
+
+			protected function onMigrateButtonClick(event:MouseEvent):void
+			{
+				doMigrate = true;
+				doConnect();
+			}
+			
+			
+			protected function log(value:Object):void
+			{
+				trace(value);
+				output.appendText(value.toString()+"\n");
+			}
+
+		]]>
+	</fx:Script>
+	
 	<fx:Declarations>
-		<!-- Place non-visual elements (e.g., services, value objects) here -->
+		
 	</fx:Declarations>
+	
+	<s:Panel width="100%" height="100%" title="ZaaLabs gTalk Migrator">
+		<s:layout>
+			<s:VerticalLayout paddingBottom="10" paddingLeft="10" paddingRight="10" paddingTop="10" />
+		</s:layout>
+		<s:Group width="100%">
+			<s:layout>
+				<s:HorizontalLayout />
+			</s:layout>
+			<s:Panel width="100%" height="125" title="From Account">
+				<mx:Form width="100%" height="100%">
+					<mx:FormItem label="Username" width="100%">
+						<s:TextInput id="fromUsername" width="100%"  text=""/>
+					</mx:FormItem>
+					
+					<mx:FormItem label="Password" width="100%" >
+						<s:TextInput id="fromPassword" displayAsPassword="true" width="100%"/>
+					</mx:FormItem>
+				</mx:Form>
+			</s:Panel>
+			<s:Panel width="100%" height="125" title="To Account">
+				<mx:Form width="100%" height="100%">
+					<mx:FormItem label="Username" width="100%">
+						<s:TextInput id="toUsername" width="100%"  text=""/>
+					</mx:FormItem>
+					
+					<mx:FormItem label="Password" width="100%">
+						<s:TextInput id="toPassword" displayAsPassword="true" width="100%"/>
+					</mx:FormItem>
+				</mx:Form>
+			</s:Panel>
+		</s:Group>
+		<s:Panel width="100%" height="100%" title="Console">
+			<s:TextArea id="output" width="100%" height="100%" borderVisible="false" editable="false" />
+		</s:Panel>
+		<s:controlBarLayout>
+			<s:HorizontalLayout horizontalAlign="center" paddingTop="10" paddingBottom="10" gap="25" />
+		</s:controlBarLayout>
+		<s:controlBarContent>
+			<s:Button label="Test" width="100" height="100" fontWeight="bold"
+					  click="onTestButtonClick(event)" />
+			<s:Button label="Migrate" width="100" height="100" fontWeight="bold"
+					  click="onMigrateButtonClick(event)" />
+		</s:controlBarContent>
+	</s:Panel>
 </s:Application>
