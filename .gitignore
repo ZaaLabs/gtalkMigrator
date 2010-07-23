@@ -19,5 +19,7 @@ workspace/Swindle/.actionScriptProperties
 **/*/bin/**/*
 #ignore bin-debug
 **/*/bin-debug/*
+#ignore bin-release
+**/*/bin-release/*
 #ignore html-template
 **/*/html-template/**/*
